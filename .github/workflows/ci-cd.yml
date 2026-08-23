@@ -1,0 +1,60 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main, homolog]
+  push:
+    branches: [main, homolog]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build auth image
+        run: docker build -f Dockerfile.auth -t oficina-auth-lambda:latest .
+      - name: Build notify image
+        run: docker build -f Dockerfile.notify -t oficina-notify-lambda:latest .
+
+  deploy:
+    needs: image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: oficina-cluster
+          install_only: true
+      - name: Create kind cluster and load images
+        run: |
+          kind create cluster --name oficina-cluster
+          docker build -f Dockerfile.auth -t oficina-auth-lambda:latest .
+          docker build -f Dockerfile.notify -t oficina-notify-lambda:latest .
+          kind load docker-image oficina-auth-lambda:latest --name oficina-cluster
+          kind load docker-image oficina-notify-lambda:latest --name oficina-cluster
+          kubectl create namespace oficina --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n oficina create secret generic oficina-secret \
+            --from-literal=POSTGRES_USER=admin \
+            --from-literal=POSTGRES_PASSWORD=admin \
+            --from-literal=JWT_SECRET=localDevelopmentSecretChangeMeInProductionEnvironments123456 \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -f k8s/auth-lambda.yaml
+          kubectl apply -f k8s/notify-lambda.yaml
+          kubectl -n oficina rollout status deployment/auth-lambda --timeout=180s
+          kubectl -n oficina rollout status deployment/notify-lambda --timeout=180s

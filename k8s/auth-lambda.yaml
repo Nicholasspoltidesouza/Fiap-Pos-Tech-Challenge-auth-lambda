@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-lambda
+  namespace: oficina
+  labels:
+    app: auth-lambda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-lambda
+  template:
+    metadata:
+      labels:
+        app: auth-lambda
+    spec:
+      containers:
+        - name: auth-lambda
+          image: oficina-auth-lambda:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_HOST
+              value: postgres.oficina-db.svc.cluster.local
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: oficina_mec_db
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: oficina-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oficina-secret
+                  key: POSTGRES_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oficina-secret
+                  key: JWT_SECRET
+            - name: JWT_ISSUER
+              value: oficina-auth
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-lambda
+  namespace: oficina
+spec:
+  selector:
+    app: auth-lambda
+  ports:
+    - port: 8080
+      targetPort: 8080
